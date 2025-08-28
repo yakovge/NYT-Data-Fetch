@@ -1,0 +1,32 @@
+[tool.black]
+line-length = 100
+target-version = ['py39']
+include = '\.pyi?$'
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+strict = true
+ignore_missing_imports = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+select = ["E", "F", "W", "I", "N", "B", "S"]
+ignore = ["E501", "B008"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_functions = "test_*"
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["nyt_scraper"]
+omit = ["*/tests/*", "*/test_*.py"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true

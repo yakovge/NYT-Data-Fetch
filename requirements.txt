@@ -1,0 +1,38 @@
+# Core dependencies
+httpx[http2,brotli]==0.27.0
+selectolax==0.3.21
+lxml==5.1.0
+beautifulsoup4==4.12.3
+python-dateutil==2.8.2
+chardet==5.2.0
+pytz==2024.1
+
+# Storage
+whoosh==2.7.4
+simhash==2.1.2
+
+# Monitoring
+prometheus-client==0.19.0
+structlog==24.1.0
+
+# Testing
+pytest==8.0.0
+pytest-cov==4.1.0
+pytest-asyncio==0.23.3
+vcrpy==6.0.1
+
+# Code quality
+black==24.1.1
+flake8==7.0.0
+mypy==1.8.0
+ruff==0.1.14
+pip-audit==2.6.3
+
+# Optional
+playwright==1.41.1  # For headless browser fallback
+python-dotenv==1.0.0
+pyyaml==6.0.1
+jsonschema==4.21.1
+anthropic==0.31.2  # For AI fallback
+aiofiles==23.2.1
+tenacity==8.2.3
