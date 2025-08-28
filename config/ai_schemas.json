@@ -1,0 +1,383 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AI Response Validation Schemas",
+  "description": "JSON Schema definitions for validating AI-generated content in the NYT scraper",
+  
+  "definitions": {
+    "micro_ai_response": {
+      "type": "object",
+      "title": "Micro AI Gap Fill Response",
+      "description": "Schema for micro-AI responses that fill in missing metadata fields",
+      "properties": {
+        "title": {
+          "type": ["string", "null"],
+          "minLength": 5,
+          "maxLength": 300,
+          "description": "Article headline/title if missing from deterministic parsing"
+        },
+        "author": {
+          "type": ["string", "null"],
+          "minLength": 2,
+          "maxLength": 200,
+          "pattern": "^[^\\n\\r]*$",
+          "description": "Article author name(s) if missing from deterministic parsing"
+        },
+        "date": {
+          "type": ["string", "null"],
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}",
+          "description": "Publication date in ISO 8601 format if missing"
+        },
+        "section": {
+          "type": ["string", "null"],
+          "minLength": 2,
+          "maxLength": 50,
+          "pattern": "^[a-zA-Z0-9\\s-_]+$",
+          "description": "Article section/category if missing"
+        },
+        "tags": {
+          "type": ["array", "null"],
+          "items": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 30,
+            "pattern": "^[^\\n\\r]+$"
+          },
+          "maxItems": 10,
+          "uniqueItems": true,
+          "description": "Article tags/keywords if missing"
+        },
+        "summary": {
+          "type": ["string", "null"],
+          "minLength": 20,
+          "maxLength": 500,
+          "description": "Brief article summary if missing"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "AI confidence level in the extracted data"
+        },
+        "fields_filled": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["title", "author", "date", "section", "tags", "summary"]
+          },
+          "uniqueItems": true,
+          "description": "List of fields that were successfully filled by micro-AI"
+        }
+      },
+      "required": ["confidence", "fields_filled"],
+      "additionalProperties": false
+    },
+
+    "heavy_ai_response": {
+      "type": "object",
+      "title": "Heavy AI Content Extraction Response", 
+      "description": "Schema for heavy AI full content analysis when deterministic parsing fails",
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 300,
+          "description": "Extracted article headline"
+        },
+        "author": {
+          "type": ["string", "null"],
+          "minLength": 2,
+          "maxLength": 200,
+          "pattern": "^[^\\n\\r]*$",
+          "description": "Extracted author name(s)"
+        },
+        "content": {
+          "type": "string",
+          "minLength": 100,
+          "maxLength": 50000,
+          "description": "Full article body text, cleaned of boilerplate"
+        },
+        "date": {
+          "type": ["string", "null"],
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}",
+          "description": "Publication date in ISO 8601 format"
+        },
+        "section": {
+          "type": ["string", "null"],
+          "minLength": 2,
+          "maxLength": 50,
+          "pattern": "^[a-zA-Z0-9\\s-_]+$",
+          "description": "Article section/category"
+        },
+        "tags": {
+          "type": ["array", "null"],
+          "items": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 30,
+            "pattern": "^[^\\n\\r]+$"
+          },
+          "maxItems": 15,
+          "uniqueItems": true,
+          "description": "Relevant article tags/keywords"
+        },
+        "summary": {
+          "type": ["string", "null"],
+          "minLength": 50,
+          "maxLength": 1000,
+          "description": "Article summary/lead paragraph"
+        },
+        "word_count": {
+          "type": "integer",
+          "minimum": 50,
+          "maximum": 20000,
+          "description": "Word count of extracted content"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "AI confidence level in the extraction quality"
+        },
+        "extraction_method": {
+          "type": "string",
+          "enum": ["json_ld_analysis", "semantic_structure", "pattern_matching", "content_analysis"],
+          "description": "Method used by AI to extract content"
+        },
+        "quality_indicators": {
+          "type": "object",
+          "properties": {
+            "has_byline": {
+              "type": "boolean",
+              "description": "Whether a byline/author was found"
+            },
+            "has_timestamp": {
+              "type": "boolean", 
+              "description": "Whether publication date was found"
+            },
+            "proper_paragraphs": {
+              "type": "boolean",
+              "description": "Whether content is properly formatted in paragraphs"
+            },
+            "minimal_boilerplate": {
+              "type": "boolean",
+              "description": "Whether boilerplate content was successfully filtered"
+            },
+            "coherent_structure": {
+              "type": "boolean",
+              "description": "Whether content follows coherent article structure"
+            }
+          },
+          "required": ["has_byline", "has_timestamp", "proper_paragraphs", "minimal_boilerplate", "coherent_structure"],
+          "description": "Quality assessment indicators"
+        }
+      },
+      "required": ["title", "content", "word_count", "confidence", "extraction_method", "quality_indicators"],
+      "additionalProperties": false
+    },
+
+    "ai_validation_response": {
+      "type": "object",
+      "title": "AI Content Validation Response",
+      "description": "Schema for AI validation of extracted content quality",
+      "properties": {
+        "is_valid": {
+          "type": "boolean",
+          "description": "Whether the content passes validation checks"
+        },
+        "validation_score": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Overall validation score (0-1)"
+        },
+        "checks": {
+          "type": "object",
+          "properties": {
+            "is_article_content": {
+              "type": "boolean",
+              "description": "Content appears to be genuine article text"
+            },
+            "minimal_boilerplate": {
+              "type": "boolean",
+              "description": "Low amount of boilerplate/navigation content"
+            },
+            "coherent_structure": {
+              "type": "boolean",
+              "description": "Content has logical article structure"
+            },
+            "appropriate_length": {
+              "type": "boolean",
+              "description": "Content length is reasonable for an article"
+            },
+            "consistent_metadata": {
+              "type": "boolean",
+              "description": "Metadata fields are consistent with content"
+            },
+            "language_quality": {
+              "type": "boolean",
+              "description": "Content uses proper grammar and language"
+            },
+            "no_spam_indicators": {
+              "type": "boolean",
+              "description": "Content doesn't show spam/low-quality indicators"
+            }
+          },
+          "required": [
+            "is_article_content",
+            "minimal_boilerplate", 
+            "coherent_structure",
+            "appropriate_length",
+            "consistent_metadata",
+            "language_quality",
+            "no_spam_indicators"
+          ],
+          "description": "Individual validation check results"
+        },
+        "issues_found": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "excessive_boilerplate",
+              "navigation_artifacts",
+              "incomplete_content", 
+              "inconsistent_metadata",
+              "poor_language_quality",
+              "spam_indicators",
+              "truncated_content",
+              "duplicate_paragraphs",
+              "advertisement_content",
+              "social_media_widgets"
+            ]
+          },
+          "uniqueItems": true,
+          "description": "List of specific validation issues identified"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "AI confidence in the validation assessment"
+        },
+        "recommendations": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "maxItems": 5,
+          "description": "Specific recommendations for improving content quality"
+        }
+      },
+      "required": ["is_valid", "validation_score", "checks", "issues_found", "confidence"],
+      "additionalProperties": false
+    },
+
+    "ai_error_response": {
+      "type": "object",
+      "title": "AI Error Response",
+      "description": "Schema for AI error responses when processing fails",
+      "properties": {
+        "error": {
+          "type": "boolean",
+          "const": true,
+          "description": "Indicates this is an error response"
+        },
+        "error_type": {
+          "type": "string",
+          "enum": [
+            "parsing_failed",
+            "content_too_short",
+            "no_content_found", 
+            "paywall_detected",
+            "challenge_detected",
+            "rate_limited",
+            "invalid_html",
+            "network_error",
+            "token_limit_exceeded"
+          ],
+          "description": "Type of error encountered"
+        },
+        "error_message": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 500,
+          "description": "Human-readable error description"
+        },
+        "retry_suggested": {
+          "type": "boolean",
+          "description": "Whether retrying the request might succeed"
+        },
+        "retry_after_seconds": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 86400,
+          "description": "Suggested retry delay in seconds"
+        }
+      },
+      "required": ["error", "error_type", "error_message", "retry_suggested"],
+      "additionalProperties": false
+    }
+  },
+
+  "anyOf": [
+    {"$ref": "#/definitions/micro_ai_response"},
+    {"$ref": "#/definitions/heavy_ai_response"},
+    {"$ref": "#/definitions/ai_validation_response"},
+    {"$ref": "#/definitions/ai_error_response"}
+  ],
+
+  "examples": [
+    {
+      "title": "Micro AI Gap Fill Example",
+      "example": {
+        "author": "Jane Smith",
+        "section": "technology",
+        "tags": ["artificial intelligence", "machine learning", "tech industry"],
+        "confidence": 0.92,
+        "fields_filled": ["author", "section", "tags"]
+      }
+    },
+    {
+      "title": "Heavy AI Extraction Example", 
+      "example": {
+        "title": "Major Breakthrough in Quantum Computing Achieved",
+        "author": "John Doe",
+        "content": "Scientists at a leading research university have announced a significant breakthrough in quantum computing technology...",
+        "date": "2024-01-15T14:30:00Z",
+        "section": "science",
+        "tags": ["quantum computing", "research", "technology"],
+        "summary": "Researchers demonstrate new quantum computing technique that could revolutionize the field.",
+        "word_count": 847,
+        "confidence": 0.88,
+        "extraction_method": "semantic_structure",
+        "quality_indicators": {
+          "has_byline": true,
+          "has_timestamp": true,
+          "proper_paragraphs": true,
+          "minimal_boilerplate": true,
+          "coherent_structure": true
+        }
+      }
+    },
+    {
+      "title": "AI Validation Example",
+      "example": {
+        "is_valid": true,
+        "validation_score": 0.89,
+        "checks": {
+          "is_article_content": true,
+          "minimal_boilerplate": true,
+          "coherent_structure": true,
+          "appropriate_length": true,
+          "consistent_metadata": true,
+          "language_quality": true,
+          "no_spam_indicators": true
+        },
+        "issues_found": [],
+        "confidence": 0.91,
+        "recommendations": []
+      }
+    }
+  ]
+}

@@ -144,7 +144,7 @@ class PaywallDetector:
             text = article_body.text()
             
             # Check if text ends mid-sentence (no proper punctuation)
-            if text and not text.rstrip().endswith(('.', '!', '?', '"', ''')):
+            if text and not text.rstrip().endswith(('.', '!', '?', '"', "'")):
                 # But make sure it's not just a short preview
                 if len(text) > 200:  # Reasonable article should be longer
                     return True

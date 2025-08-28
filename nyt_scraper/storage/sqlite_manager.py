@@ -36,7 +36,7 @@ class SQLiteManager:
                     conn.execute("PRAGMA temp_store=MEMORY")
                     conn.execute("PRAGMA mmap_size=268435456")  # 256MB
                     
-                    # Create articles table (from implementation plan)
+                    # Create articles table with enhanced telemetry (from updated implementation plan)
                     conn.execute("""
                         CREATE TABLE IF NOT EXISTS articles (
                             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -59,6 +59,16 @@ class SQLiteManager:
                             fetch_duration_ms REAL,
                             status TEXT DEFAULT 'stored',
                             error_message TEXT,
+                            -- Enhanced telemetry columns
+                            parser_path TEXT,
+                            parse_confidence REAL,
+                            did_use_micro_ai BOOLEAN DEFAULT 0,
+                            did_escalate_heavy BOOLEAN DEFAULT 0,
+                            challenge_detected BOOLEAN DEFAULT 0,
+                            paywall_detected BOOLEAN DEFAULT 0,
+                            word_count INTEGER,
+                            char_count INTEGER,
+                            normalized_checksum TEXT,
                             last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
                             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -75,7 +85,11 @@ class SQLiteManager:
                         "CREATE INDEX IF NOT EXISTS idx_section ON articles(section)",
                         "CREATE INDEX IF NOT EXISTS idx_status ON articles(status)",
                         "CREATE INDEX IF NOT EXISTS idx_created_at ON articles(created_at)",
-                        "CREATE INDEX IF NOT EXISTS idx_last_seen ON articles(last_seen)"
+                        "CREATE INDEX IF NOT EXISTS idx_last_seen ON articles(last_seen)",
+                        # Enhanced telemetry indexes
+                        "CREATE INDEX IF NOT EXISTS idx_parser_path ON articles(parser_path)",
+                        "CREATE INDEX IF NOT EXISTS idx_ai_usage ON articles(did_use_micro_ai, did_escalate_heavy)",
+                        "CREATE INDEX IF NOT EXISTS idx_challenges ON articles(challenge_detected, paywall_detected)"
                     ]
                     
                     for index_sql in indexes:
@@ -91,11 +105,45 @@ class SQLiteManager:
                         END
                     """)
                     
+                    # Handle schema migration for existing databases
+                    self._migrate_schema(conn)
+                    
                     logger.info("sqlite_database_initialized", db_path=str(self.db_path))
                     
             except Exception as e:
                 logger.error("sqlite_init_error", error=str(e))
                 raise
+    
+    def _migrate_schema(self, conn: sqlite3.Connection):
+        """Migrate existing database schema to include new telemetry columns."""
+        try:
+            # Check if we need to add new telemetry columns
+            cursor = conn.execute("PRAGMA table_info(articles)")
+            columns = {row[1] for row in cursor.fetchall()}
+            
+            # New telemetry columns to add
+            new_columns = {
+                "parser_path": "TEXT",
+                "parse_confidence": "REAL", 
+                "did_use_micro_ai": "BOOLEAN DEFAULT 0",
+                "did_escalate_heavy": "BOOLEAN DEFAULT 0",
+                "challenge_detected": "BOOLEAN DEFAULT 0",
+                "paywall_detected": "BOOLEAN DEFAULT 0",
+                "word_count": "INTEGER",
+                "char_count": "INTEGER",
+                "normalized_checksum": "TEXT"
+            }
+            
+            # Add missing columns
+            for column_name, column_type in new_columns.items():
+                if column_name not in columns:
+                    conn.execute(f"ALTER TABLE articles ADD COLUMN {column_name} {column_type}")
+                    logger.info("schema_migration_column_added", column=column_name)
+            
+            logger.info("schema_migration_completed")
+            
+        except Exception as e:
+            logger.warning("schema_migration_failed", error=str(e))
     
     def store_article(self, article: Article) -> bool:
         """
@@ -123,8 +171,10 @@ class SQLiteManager:
                             source_url, canonical_url, redirect_chain, title, author,
                             published_date, updated_date, content, section, tags,
                             body_hash, simhash, etag, last_modified, parse_method,
-                            parse_duration_ms, fetch_duration_ms, status, error_message
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            parse_duration_ms, fetch_duration_ms, status, error_message,
+                            parser_path, parse_confidence, did_use_micro_ai, did_escalate_heavy,
+                            challenge_detected, paywall_detected, word_count, char_count, normalized_checksum
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(canonical_url) DO UPDATE SET
                             source_url = excluded.source_url,
                             title = excluded.title,
@@ -142,6 +192,15 @@ class SQLiteManager:
                             fetch_duration_ms = excluded.fetch_duration_ms,
                             status = excluded.status,
                             error_message = excluded.error_message,
+                            parser_path = excluded.parser_path,
+                            parse_confidence = excluded.parse_confidence,
+                            did_use_micro_ai = excluded.did_use_micro_ai,
+                            did_escalate_heavy = excluded.did_escalate_heavy,
+                            challenge_detected = excluded.challenge_detected,
+                            paywall_detected = excluded.paywall_detected,
+                            word_count = excluded.word_count,
+                            char_count = excluded.char_count,
+                            normalized_checksum = excluded.normalized_checksum,
                             last_seen = CURRENT_TIMESTAMP
                     """, article_data)
                     
@@ -407,7 +466,17 @@ class SQLiteManager:
             article.parse_duration_ms,
             article.fetch_duration_ms,
             article.status.value,
-            article.error_message
+            article.error_message,
+            # Enhanced telemetry fields
+            article.parser_path,
+            article.parse_confidence,
+            article.did_use_micro_ai,
+            article.did_escalate_heavy,
+            article.challenge_detected,
+            article.paywall_detected,
+            article.word_count,
+            article.char_count,
+            article.normalized_checksum
         )
     
     def _db_row_to_article(self, row: sqlite3.Row) -> Article:
@@ -432,9 +501,26 @@ class SQLiteManager:
             fetch_duration_ms=row['fetch_duration_ms'],
             status=ArticleStatus(row['status']) if row['status'] else ArticleStatus.STORED,
             error_message=row['error_message'],
+            # Enhanced telemetry fields (safe access for migration compatibility)
+            parser_path=self._safe_row_get(row, 'parser_path'),
+            parse_confidence=self._safe_row_get(row, 'parse_confidence'),
+            did_use_micro_ai=bool(self._safe_row_get(row, 'did_use_micro_ai', False)),
+            did_escalate_heavy=bool(self._safe_row_get(row, 'did_escalate_heavy', False)),
+            challenge_detected=bool(self._safe_row_get(row, 'challenge_detected', False)),
+            paywall_detected=bool(self._safe_row_get(row, 'paywall_detected', False)),
+            word_count=self._safe_row_get(row, 'word_count'),
+            char_count=self._safe_row_get(row, 'char_count'),
+            normalized_checksum=self._safe_row_get(row, 'normalized_checksum'),
             discovered_at=datetime.fromisoformat(row['created_at']),
             stored_at=datetime.fromisoformat(row['created_at'])
         )
+    
+    def _safe_row_get(self, row: sqlite3.Row, column_name: str, default=None):
+        """Safely get column value from row, return default if column doesn't exist."""
+        try:
+            return row[column_name]
+        except IndexError:
+            return default
     
     def close(self):
         """Close database connection and perform cleanup."""

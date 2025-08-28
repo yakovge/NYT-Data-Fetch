@@ -1,0 +1,250 @@
+# New York Times Website Configuration
+# This file contains NYT-specific parsing rules and discovery sources
+
+site:
+  name: "New York Times"
+  domain: "nytimes.com"
+  base_url: "https://www.nytimes.com"
+  encoding: "utf-8"
+  
+# Discovery sources for finding articles
+discovery:
+  # RSS feeds for different sections
+  rss_feeds:
+    - url: "https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml"
+      section: "home"
+      priority: 1
+      refresh_interval: 30
+    - url: "https://rss.nytimes.com/services/xml/rss/nyt/World.xml"
+      section: "world"
+      priority: 1
+      refresh_interval: 30
+    - url: "https://rss.nytimes.com/services/xml/rss/nyt/US.xml"
+      section: "us"
+      priority: 1
+      refresh_interval: 30
+    - url: "https://rss.nytimes.com/services/xml/rss/nyt/Politics.xml"
+      section: "politics"
+      priority: 1
+      refresh_interval: 30
+    - url: "https://rss.nytimes.com/services/xml/rss/nyt/NYRegion.xml"
+      section: "nyregion"
+      priority: 2
+      refresh_interval: 60
+    - url: "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml"
+      section: "business"
+      priority: 1
+      refresh_interval: 30
+    - url: "https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml"
+      section: "technology"
+      priority: 1
+      refresh_interval: 30
+    - url: "https://rss.nytimes.com/services/xml/rss/nyt/Science.xml"
+      section: "science"
+      priority: 2
+      refresh_interval: 60
+    - url: "https://rss.nytimes.com/services/xml/rss/nyt/Health.xml"
+      section: "health"
+      priority: 2
+      refresh_interval: 60
+    - url: "https://rss.nytimes.com/services/xml/rss/nyt/Sports.xml"
+      section: "sports"
+      priority: 2
+      refresh_interval: 60
+    - url: "https://rss.nytimes.com/services/xml/rss/nyt/Arts.xml"
+      section: "arts"
+      priority: 2
+      refresh_interval: 60
+    - url: "https://rss.nytimes.com/services/xml/rss/nyt/Movies.xml"
+      section: "movies"
+      priority: 3
+      refresh_interval: 120
+    - url: "https://rss.nytimes.com/services/xml/rss/nyt/Theater.xml"
+      section: "theater"
+      priority: 3
+      refresh_interval: 120
+    - url: "https://rss.nytimes.com/services/xml/rss/nyt/Opinion.xml"
+      section: "opinion"
+      priority: 2
+      refresh_interval: 60
+    - url: "https://rss.nytimes.com/services/xml/rss/nyt/Sunday.xml"
+      section: "sunday"
+      priority: 2
+      refresh_interval: 60
+
+  # XML sitemaps for comprehensive discovery
+  sitemaps:
+    - url: "https://www.nytimes.com/sitemaps/new/news.xml.gz"
+      format: "news"
+      priority: 1
+      refresh_interval: 60
+      max_entries: 1000
+    - url: "https://www.nytimes.com/sitemaps/www.nytimes.com/article-sitemap.xml"
+      format: "article"
+      priority: 2
+      refresh_interval: 120
+      max_entries: 500
+
+  # Search engine fallback patterns
+  search_patterns:
+    - "site:nytimes.com {query}"
+    - "site:nytimes.com after:2024-01-01 {query}"
+    - "site:nytimes.com {query} -interactive -video"
+
+# Content parsing configuration
+parsing:
+  # CSS selectors for content extraction (deterministic parsing)
+  selectors:
+    # Primary content selectors
+    title: 
+      - "h1[data-testid='headline']"
+      - "h1.css-1j88qqx"
+      - "h1.e1h9rw200"
+      - "meta[property='og:title']"
+    
+    author:
+      - "[data-testid='byline'] a"
+      - ".css-1baulvz a"
+      - ".byline-author"
+      - "meta[name='author']"
+    
+    content:
+      - "section[name='articleBody'] p"
+      - ".css-53u6y8 p"
+      - ".StoryBodyCompanionColumn p"
+      - "[data-testid='ArticleBody'] p"
+    
+    date:
+      - "time[datetime]"
+      - "meta[property='article:published_time']"
+      - "[data-testid='timestamp']"
+    
+    section:
+      - "nav[data-testid='vi-nav'] a"
+      - ".css-1xb3u9u"
+      - "meta[property='article:section']"
+    
+    tags:
+      - "[data-testid='ArticleTags'] a"
+      - ".css-1xb3u9u a"
+      - "meta[name='keywords']"
+    
+    image:
+      - "picture img[src*='articleInline']"
+      - ".css-1xb3u9u img"
+      - "meta[property='og:image']"
+    
+    summary:
+      - "meta[name='description']"
+      - "meta[property='og:description']"
+      - "[data-testid='ArticleSummary']"
+
+  # XPath selectors as fallbacks
+  xpath_selectors:
+    title:
+      - "//h1[@data-testid='headline']"
+      - "//h1[contains(@class, 'css-')]"
+    content:
+      - "//section[@name='articleBody']//p"
+      - "//div[contains(@class, 'StoryBodyCompanionColumn')]//p"
+    author:
+      - "//div[@data-testid='byline']//a"
+
+  # Content patterns to remove (boilerplate filtering)
+  boilerplate_patterns:
+    - "Sign up for.*newsletter"
+    - "Advertisement"
+    - "Supported by"
+    - "Continue reading the main story"
+    - "We'd like your feedback"
+    - "More from The New York Times"
+    - "Follow.*on Twitter"
+    - "Email.*reporter at"
+    - "\\[Subscribe to.*\\]"
+    - "Image.*Credit.*"
+    - "CreditCredit\\.\\.\\."
+    - "Read more about.*in.*"
+
+  # Content validation rules
+  validation:
+    min_body_chars: 500          # Minimum article body length
+    min_paragraphs: 3            # Minimum paragraph count
+    max_title_chars: 200         # Maximum title length
+    min_title_chars: 10          # Minimum title length
+    required_fields: ["title", "content", "date"]
+    
+    # Content quality indicators
+    quality_indicators:
+      - "data-testid='headline'"     # Proper headline structure
+      - "section[name='articleBody']" # Structured article body
+      - "time[datetime]"             # Proper timestamp
+      - "data-testid='byline'"       # Proper byline
+    
+    # Paywall detection patterns
+    paywall_indicators:
+      - "Continue reading your article with"
+      - "Subscribe to The New York Times"
+      - "Thanks for reading The Times"
+      - "Create your free account or log in"
+      - "data-testid='paywall'"
+      - "css-paywall"
+
+  # Challenge detection patterns (anti-bot measures)
+  challenge_patterns:
+    - "Checking your browser"
+    - "DDoS protection by"
+    - "Ray ID:"
+    - "Cloudflare"
+    - "Turnstile"
+    - "captcha"
+    - "cf-browser-verification"
+
+# Rate limiting and politeness
+rate_limiting:
+  requests_per_minute: 20
+  burst_allowance: 5
+  delay_between_requests: 3.0
+  respect_retry_after: true
+  max_concurrent_connections: 2
+
+# User agent rotation specific to NYT
+user_agents:
+  - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+  - "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+  - "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+
+# HTTP headers
+headers:
+  Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
+  Accept-Language: "en-US,en;q=0.9"
+  Accept-Encoding: "gzip, deflate, br"
+  DNT: "1"
+  Upgrade-Insecure-Requests: "1"
+  Sec-Fetch-Dest: "document"
+  Sec-Fetch-Mode: "navigate"
+  Sec-Fetch-Site: "none"
+
+# Caching configuration
+caching:
+  respect_etags: true
+  respect_last_modified: true
+  max_cache_age_hours: 24
+  cache_404_responses: false
+  cache_error_responses: false
+
+# Content processing
+processing:
+  # Text normalization
+  normalize_whitespace: true
+  remove_extra_newlines: true
+  strip_html_comments: true
+  
+  # Language detection
+  expected_language: "en"
+  language_threshold: 0.8
+  
+  # Content filtering
+  min_word_count: 50
+  filter_navigation: true
+  filter_advertisements: true
+  filter_social_media_widgets: true

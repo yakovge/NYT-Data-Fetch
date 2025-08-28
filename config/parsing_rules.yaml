@@ -1,0 +1,391 @@
+# Cross-Site Parsing Rules Configuration
+# Generic parsing patterns and rules that can be applied across multiple news sites
+
+# Global parsing configuration
+global:
+  # Default timeouts and retry settings
+  parse_timeout_seconds: 30
+  max_retries: 3
+  retry_delay_seconds: 1.0
+  
+  # Content normalization settings
+  normalize_whitespace: true
+  remove_extra_newlines: true
+  strip_html_comments: true
+  decode_html_entities: true
+  
+  # Language detection
+  default_language: "en"
+  language_detection_enabled: true
+  language_confidence_threshold: 0.8
+
+# Generic CSS selectors that work across many news sites
+generic_selectors:
+  # Article title selectors (ordered by priority)
+  title:
+    - "h1[class*='headline']"
+    - "h1[class*='title']" 
+    - "h1[data-testid*='headline']"
+    - "h1[data-testid*='title']"
+    - ".headline h1"
+    - ".article-title h1"
+    - ".story-headline h1"
+    - "h1.entry-title"
+    - "article h1"
+    - "main h1"
+    
+  # Author/byline selectors
+  author:
+    - "[class*='byline'] a"
+    - "[class*='author'] a"
+    - "[data-testid*='byline'] a"
+    - "[data-testid*='author'] a"
+    - ".byline-author"
+    - ".author-name"
+    - ".article-author a"
+    - "span[rel='author']"
+    - ".vcard .fn"
+    
+  # Article body content selectors  
+  content:
+    - "[class*='article-body'] p"
+    - "[class*='story-body'] p"
+    - "[class*='entry-content'] p"
+    - "[data-testid*='article-body'] p"
+    - ".article-content p"
+    - ".post-content p"
+    - "main article p"
+    - ".content p"
+    
+  # Publication date selectors
+  date:
+    - "time[datetime]"
+    - "[class*='timestamp']"
+    - "[class*='date']"
+    - "[data-testid*='date']"
+    - "[data-testid*='timestamp']"
+    - ".published-date"
+    - ".article-date"
+    - ".post-date"
+    
+  # Article section/category selectors
+  section:
+    - "[class*='section'] a"
+    - "[class*='category'] a"
+    - "[data-testid*='section']"
+    - ".article-section"
+    - ".category-name"
+    - "nav[class*='breadcrumb'] a:last-child"
+    
+  # Article tags/keywords selectors
+  tags:
+    - "[class*='tags'] a"
+    - "[class*='keywords'] a"  
+    - "[data-testid*='tags'] a"
+    - ".article-tags a"
+    - ".post-tags a"
+    - ".tag-list a"
+
+# Common XPath selectors for fallback parsing
+xpath_selectors:
+  title:
+    - "//h1[contains(@class, 'headline')]"
+    - "//h1[contains(@class, 'title')]"
+    - "//h1[contains(@data-testid, 'headline')]"
+    - "//article//h1"
+    - "//main//h1"
+    
+  content:
+    - "//div[contains(@class, 'article-body')]//p"
+    - "//div[contains(@class, 'story-body')]//p"  
+    - "//div[contains(@class, 'entry-content')]//p"
+    - "//article//p[string-length(text()) > 20]"
+    - "//main//p[string-length(text()) > 20]"
+    
+  author:
+    - "//div[contains(@class, 'byline')]//a"
+    - "//span[contains(@class, 'author')]//a"
+    - "//*[@rel='author']"
+
+# OpenGraph and meta tag mappings
+meta_mappings:
+  title:
+    - "og:title"
+    - "twitter:title"
+    - "title"
+    
+  description:
+    - "og:description" 
+    - "twitter:description"
+    - "description"
+    
+  author:
+    - "author"
+    - "article:author"
+    - "twitter:creator"
+    
+  date:
+    - "article:published_time"
+    - "article:modified_time"
+    - "pubdate"
+    - "date"
+    
+  section:
+    - "article:section"
+    - "article:tag"
+    - "section"
+    
+  image:
+    - "og:image"
+    - "twitter:image"
+    - "image"
+    
+  url:
+    - "og:url"
+    - "canonical"
+
+# JSON-LD schema mappings
+jsonld_mappings:
+  # Schema.org Article types
+  article_types:
+    - "Article"
+    - "NewsArticle" 
+    - "BlogPosting"
+    - "ScholarlyArticle"
+    - "TechArticle"
+    - "Report"
+    
+  # Field mappings from JSON-LD to internal fields
+  field_mappings:
+    headline: "title"
+    alternativeHeadline: "title"
+    name: "title"
+    articleBody: "content"  
+    text: "content"
+    description: "summary"
+    author:
+      - "author.name"
+      - "author[0].name"
+      - "author"
+    datePublished: "date"
+    dateCreated: "date"
+    dateModified: "updated_date"
+    articleSection: "section"
+    about: "tags"
+    keywords: "tags"
+    image:
+      - "image.url"
+      - "image[0].url"
+      - "image"
+    url: "url"
+    publisher:
+      - "publisher.name"
+      - "publisher"
+
+# Framework-specific extraction patterns
+framework_patterns:
+  # Next.js patterns
+  nextjs:
+    data_attribute: "__NEXT_DATA__"
+    json_path: "props.pageProps"
+    content_paths:
+      - "article"
+      - "post" 
+      - "content"
+      - "data.article"
+      
+  # Nuxt.js patterns
+  nuxtjs:
+    data_attribute: "__NUXT__"
+    json_path: "data"
+    content_paths:
+      - "article"
+      - "post"
+      - "content"
+      
+  # WordPress REST API
+  wordpress:
+    api_patterns:
+      - "/wp-json/wp/v2/"
+      - "/wp-content/themes/"
+    content_paths:
+      - "content.rendered"
+      - "title.rendered"
+      - "excerpt.rendered"
+
+# Common boilerplate removal patterns
+boilerplate_patterns:
+  # Navigation and UI elements
+  navigation:
+    - "Sign up for.*newsletter"
+    - "Subscribe to.*"
+    - "Follow us on.*"
+    - "Share this.*"
+    - "More from.*"
+    - "Related.*"
+    - "Advertisement"
+    - "Sponsored.*"
+    
+  # Legal and footer content  
+  legal:
+    - "Terms of.*"
+    - "Privacy.*"
+    - "Cookie.*"
+    - "© \\d{4}.*"
+    - "All rights reserved"
+    
+  # Interactive elements
+  interactive:
+    - "Click here.*"
+    - "Read more.*"
+    - "Continue reading.*"
+    - "Load more.*"
+    - "Show more.*"
+    
+  # Social media
+  social:
+    - "Tweet this"
+    - "Share on Facebook"
+    - "Pin it"
+    - "Instagram"
+    - "@\\w+"
+    
+  # Comments and feedback
+  feedback:
+    - "Leave a comment"
+    - "What do you think"
+    - "Tell us.*"
+    - "Rate this.*"
+    - "\\d+ comments?"
+
+# Content validation rules
+validation_rules:
+  # Minimum content requirements
+  minimum_requirements:
+    title_min_length: 10
+    title_max_length: 300
+    content_min_length: 200
+    content_min_words: 50
+    content_min_paragraphs: 2
+    
+  # Content quality indicators
+  quality_indicators:
+    # Positive indicators (good signs)
+    positive:
+      - presence_of_byline: 2.0
+      - proper_date_format: 1.5
+      - structured_paragraphs: 1.0
+      - metadata_consistency: 1.5
+      - minimal_boilerplate: 1.0
+      
+    # Negative indicators (bad signs) 
+    negative:
+      - excessive_ads: -2.0
+      - navigation_artifacts: -1.5
+      - social_widgets: -1.0
+      - duplicate_content: -2.0
+      - poor_grammar: -1.0
+      
+  # Content type detection
+  content_types:
+    news_article:
+      keywords: ["breaking", "report", "news", "latest"]
+      patterns: ["\\b(today|yesterday|this week)\\b"]
+      weight: 1.0
+      
+    opinion:
+      keywords: ["opinion", "editorial", "commentary", "view"]
+      patterns: ["\\b(I think|in my view|arguably)\\b"] 
+      weight: 0.8
+      
+    feature:
+      keywords: ["feature", "profile", "investigation", "analysis"]
+      patterns: ["\\b(deep dive|in-depth|comprehensive)\\b"]
+      weight: 1.0
+      
+    review:
+      keywords: ["review", "critique", "rating"]
+      patterns: ["\\b(\\d+/10|\\d+ stars|rated)\\b"]
+      weight: 0.7
+
+# Error handling and fallback strategies
+error_handling:
+  # When primary selectors fail
+  fallback_strategy:
+    1: "try_xpath_selectors"
+    2: "try_meta_tags"
+    3: "try_jsonld_extraction"  
+    4: "try_framework_patterns"
+    5: "escalate_to_ai"
+    
+  # Error classification
+  error_types:
+    parsing_failed:
+      retry: true
+      max_retries: 2
+      escalate_to_ai: true
+      
+    content_too_short:
+      retry: false
+      escalate_to_ai: true
+      
+    paywall_detected:
+      retry: false
+      escalate_to_ai: false
+      mark_as_blocked: true
+      
+    challenge_detected:
+      retry: true
+      delay_seconds: 300
+      escalate_to_ai: false
+      
+    invalid_content_type:
+      retry: false
+      escalate_to_ai: false
+      
+  # Retry configuration
+  retry_config:
+    exponential_backoff: true
+    base_delay: 1.0
+    max_delay: 30.0
+    jitter: true
+
+# Performance optimization
+performance:
+  # Selector optimization
+  selector_optimization:
+    cache_compiled_selectors: true
+    prefer_id_selectors: true
+    prefer_class_selectors: true
+    avoid_complex_xpath: true
+    
+  # Content processing limits
+  processing_limits:
+    max_content_length: 1000000  # 1MB
+    max_dom_nodes: 50000
+    max_parsing_time: 30         # seconds
+    
+  # Parallel processing
+  parallel_processing:
+    enable_concurrent_selectors: true
+    max_concurrent_operations: 5
+    timeout_per_operation: 10    # seconds
+
+# Site-specific overrides (can be extended)
+site_overrides:
+  # Example overrides for specific domains
+  "example.com":
+    selectors:
+      title: ".custom-headline"
+      author: ".custom-byline a"
+    boilerplate_patterns:
+      - "Custom boilerplate pattern"
+    validation_rules:
+      content_min_length: 100  # Lower requirement
+      
+  # Pattern for handling subdomains
+  "*.wordpress.com":
+    framework_patterns: ["wordpress"]
+    selectors:
+      title: ".entry-title"
+      content: ".entry-content p"
