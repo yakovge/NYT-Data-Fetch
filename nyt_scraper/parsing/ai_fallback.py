@@ -1,4 +1,4 @@
-"""AI fallback with Claude Haiku and hard budget caps (~1000ms, last resort)."""
+"""AI fallback with configurable AI providers and hard budget caps (~1000ms, last resort)."""
 
 import json
 import sqlite3
@@ -7,13 +7,13 @@ from datetime import datetime, date
 from pathlib import Path
 from typing import Dict, Optional
 
-import anthropic
 import jsonschema
 from selectolax.parser import HTMLParser
 
 from ..config import config
 from ..monitoring import MetricsCollector, get_logger
 from ..models import Article, ParseMethod, ParseResult
+from ..ai import AIClient
 
 logger = get_logger(__name__)
 
@@ -21,12 +21,14 @@ logger = get_logger(__name__)
 class AIFallback:
     """AI-powered article extraction with strict budget enforcement."""
     
-    def __init__(self, metrics: MetricsCollector):
+    def __init__(self, metrics: MetricsCollector, ai_client: Optional[AIClient] = None):
         self.metrics = metrics
-        self.client = None
+        self.ai_client = ai_client or AIClient()
         self.budget_db_path = config.ai_usage_db
         self._init_budget_database()
-        self._init_anthropic_client()
+        
+        # For backward compatibility, keep client reference
+        self.client = self.ai_client
         
         # AI configuration from implementation plan
         self.ai_config = {
@@ -100,17 +102,6 @@ class AIFallback:
                 VALUES (?, 0, 0)
             """, (today,))
     
-    def _init_anthropic_client(self):
-        """Initialize Anthropic client if API key is available."""
-        if config.anthropic_api_key:
-            try:
-                self.client = anthropic.Anthropic(api_key=config.anthropic_api_key)
-                logger.info("anthropic_client_initialized")
-            except Exception as e:
-                logger.error("anthropic_client_error", error=str(e))
-                self.client = None
-        else:
-            logger.warning("anthropic_api_key_missing")
     
     def extract(self, html: str, url: str) -> ParseResult:
         """
@@ -126,7 +117,7 @@ class AIFallback:
         start_time = time.time()
         
         # Check if AI client is available
-        if not self.client:
+        if not self.ai_client or not self.ai_client.current_provider:
             return ParseResult(
                 success=False,
                 error="AI client not available",
@@ -154,8 +145,21 @@ class AIFallback:
             # Prepare HTML for AI processing
             processed_html = self._prepare_html_for_ai(html)
             
-            # Make AI request
-            ai_response = self._make_ai_request(processed_html, url)
+            # Make AI request (now async)
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # If we're in an async context, create a task
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                        future = executor.submit(asyncio.run, self._make_ai_request(processed_html, url))
+                        ai_response = future.result()
+                else:
+                    ai_response = loop.run_until_complete(self._make_ai_request(processed_html, url))
+            except RuntimeError:
+                # No event loop, create new one
+                ai_response = asyncio.run(self._make_ai_request(processed_html, url))
             
             if ai_response["success"]:
                 # Parse and validate response
@@ -346,8 +350,8 @@ class AIFallback:
         
         return combined_html
     
-    def _make_ai_request(self, html: str, url: str) -> Dict:
-        """Make request to Anthropic Claude API."""
+    async def _make_ai_request(self, html: str, url: str) -> Dict:
+        """Make request to AI provider via unified client."""
         system_prompt = "Extract article data as JSON. Output ONLY valid JSON, no explanations."
         
         user_prompt = f"""Extract from this HTML snippet:
@@ -364,17 +368,17 @@ Requirements:
 Output only valid JSON, no markdown, no explanations."""
         
         try:
-            response = self.client.messages.create(
+            response = await self.ai_client.generate(
+                messages=[{"role": "user", "content": user_prompt}],
                 model=self.ai_config["model"],
-                temperature=self.ai_config["temperature"],
                 max_tokens=self.ai_config["max_tokens"],
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_prompt}]
+                temperature=self.ai_config["temperature"],
+                system_prompt=system_prompt
             )
             
             # Extract response content
-            if response.content and len(response.content) > 0:
-                content = response.content[0].text.strip()
+            if response.content:
+                content = response.content.strip()
                 
                 # Parse JSON response
                 try:
@@ -386,7 +390,7 @@ Output only valid JSON, no markdown, no explanations."""
                     return {
                         "success": True,
                         "data": json_data,
-                        "tokens_used": response.usage.input_tokens + response.usage.output_tokens
+                        "tokens_used": response.usage.get('input_tokens', 0) + response.usage.get('output_tokens', 0)
                     }
                     
                 except json.JSONDecodeError as e:
@@ -408,7 +412,7 @@ Output only valid JSON, no markdown, no explanations."""
                             "published_date": json_data.get("published_date")
                         }
                         if salvaged["title"] and salvaged["body"]:
-                            return {"success": True, "data": salvaged}
+                            return {"success": True, "data": salvaged, "tokens_used": response.usage.get('input_tokens', 0) + response.usage.get('output_tokens', 0)}
                     except Exception:
                         pass
                     
@@ -423,23 +427,24 @@ Output only valid JSON, no markdown, no explanations."""
                 "error": "Empty response from AI"
             }
             
-        except anthropic.RateLimitError as e:
-            return {
-                "success": False,
-                "error": f"Rate limited: {e}"
-            }
-            
-        except anthropic.APIError as e:
-            return {
-                "success": False,
-                "error": f"API error: {e}"
-            }
-            
         except Exception as e:
-            return {
-                "success": False,
-                "error": f"Unexpected error: {e}"
-            }
+            # Handle rate limits and API errors generically
+            error_msg = str(e).lower()
+            if "rate limit" in error_msg or "quota" in error_msg:
+                return {
+                    "success": False,
+                    "error": f"Rate limited: {e}"
+                }
+            elif "api" in error_msg or "authentication" in error_msg:
+                return {
+                    "success": False,
+                    "error": f"API error: {e}"
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": f"Unexpected error: {e}"
+                }
     
     def _parse_ai_response(self, data: Dict, url: str) -> Optional[Article]:
         """Parse AI response into Article object."""
@@ -557,12 +562,12 @@ Output only valid JSON, no markdown, no explanations."""
                 "total_calls": total_calls[0] or 0,
                 "total_tokens": total_calls[1] or 0,
                 "success_rate_7d": success_rate,
-                "budget_status": "active" if self.client else "disabled"
+                "budget_status": "active" if self.ai_client and self.ai_client.current_provider else "disabled"
             }
     
     def can_extract(self, html: str) -> bool:
         """Check if AI extraction is available and within budget."""
-        if not self.client:
+        if not self.ai_client or not self.ai_client.current_provider:
             return False
         
         budget_check = self._check_budget_limits()

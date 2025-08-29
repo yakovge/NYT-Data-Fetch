@@ -65,11 +65,29 @@ class Config:
     ai_alert_threshold: float = float(os.getenv("AI_ALERT_THRESHOLD", "0.8"))
     ai_budget_reset_hour: int = int(os.getenv("AI_BUDGET_RESET_HOUR", "0"))
     
+    # AI Provider Configuration
+    ai_provider: str = os.getenv("AI_PROVIDER", "anthropic")  # anthropic, openai, google, grok
+    
+    # Provider-specific API keys
+    anthropic_api_key: Optional[str] = os.getenv("ANTHROPIC_API_KEY")
+    openai_api_key: Optional[str] = os.getenv("OPENAI_API_KEY")  
+    google_api_key: Optional[str] = os.getenv("GOOGLE_API_KEY")
+    xai_api_key: Optional[str] = os.getenv("XAI_API_KEY")  # For Grok
+    
+    # Provider-specific model configurations
+    anthropic_model: str = os.getenv("ANTHROPIC_MODEL", "claude-3-haiku")
+    openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    google_model: str = os.getenv("GOOGLE_MODEL", "gemini-1.5-flash")
+    grok_model: str = os.getenv("GROK_MODEL", "grok-beta")
+    
+    # Provider-specific endpoints (for custom deployments)
+    openai_base_url: Optional[str] = os.getenv("OPENAI_BASE_URL")
+    xai_base_url: str = os.getenv("XAI_BASE_URL", "https://api.x.ai/v1")
+    
     # Legacy AI config (for backward compatibility)
     ai_model: str = os.getenv("AI_MODEL", "claude-3-haiku")
     ai_daily_token_limit: int = int(os.getenv("AI_DAILY_TOKEN_LIMIT", "10000"))
     ai_fallback_ratio: float = float(os.getenv("AI_FALLBACK_RATIO", "0.01"))
-    anthropic_api_key: Optional[str] = os.getenv("ANTHROPIC_API_KEY")
     ai_triggers_dir: Path = Path("./data/ai_triggers")
     
     # Challenge Detection

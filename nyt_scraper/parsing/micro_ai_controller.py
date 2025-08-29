@@ -9,6 +9,7 @@ import hashlib
 from ..config import config
 from ..monitoring.structured_logger import get_logger
 from ..models import Article, ArticleStatus
+from ..ai import AIClient
 
 logger = get_logger(__name__)
 
@@ -16,8 +17,22 @@ logger = get_logger(__name__)
 class MicroAIController:
     """Lightweight AI controller for gap-filling missing article metadata."""
     
-    def __init__(self, anthropic_client=None):
-        self.anthropic_client = anthropic_client
+    def __init__(self, anthropic_client=None, ai_client=None):
+        # Support both new AI client and legacy anthropic client for backward compatibility
+        if ai_client:
+            self.ai_client = ai_client
+        elif anthropic_client:
+            # For backward compatibility, create a mock AI client that wraps the anthropic client
+            self.ai_client = AIClient()
+            # Mock the provider to make it appear available for testing
+            self.ai_client.current_provider = anthropic_client
+            self.ai_client.current_provider_name = "anthropic"
+            # Store the original client for backward compatibility
+            self._original_anthropic_client = anthropic_client
+        else:
+            # Create new AI client with default configuration
+            self.ai_client = AIClient()
+        
         self.enabled = config.ai_min_enabled
         self.model = config.ai_min_model
         self.max_tokens = config.ai_min_max_tokens
@@ -30,10 +45,22 @@ class MicroAIController:
         self.usage_cache = {}
         self.last_reset = datetime.utcnow().replace(hour=config.ai_budget_reset_hour, minute=0, second=0)
         
-        logger.info("micro_ai_controller_initialized",
-                   enabled=self.enabled,
-                   model=self.model,
-                   daily_limit=self.daily_limit)
+        # Log current provider info
+        provider_info = {
+            "enabled": self.enabled,
+            "model": self.model,
+            "daily_limit": self.daily_limit
+        }
+        if self.ai_client and self.ai_client.current_provider_name:
+            provider_info["provider"] = self.ai_client.current_provider_name
+        
+        logger.info("micro_ai_controller_initialized", **provider_info)
+    
+    @property
+    def anthropic_client(self):
+        """Backward compatibility property for tests and legacy code."""
+        # Return the original anthropic client if available, otherwise the ai_client
+        return getattr(self, '_original_anthropic_client', self.ai_client)
     
     def is_available(self, total_requests_today: int = 0) -> Tuple[bool, str]:
         """
@@ -48,8 +75,8 @@ class MicroAIController:
         if not self.enabled:
             return False, "micro_ai_disabled"
         
-        if not self.anthropic_client:
-            return False, "no_anthropic_client"
+        if not self.ai_client or not self.ai_client.current_provider:
+            return False, "no_ai_client"
         
         # Check daily token budget
         today_usage = self._get_today_usage()
@@ -228,28 +255,40 @@ Consider:
 - Is there substantive news information?"""
     
     async def _make_ai_request(self, prompt: str) -> Optional[str]:
-        """Make request to Anthropic API."""
-        if not self.anthropic_client:
+        """Make request to AI provider via unified client."""
+        if not self.ai_client or not self.ai_client.current_provider:
             return None
         
         try:
-            # Use asyncio to make the request non-blocking
-            loop = asyncio.get_event_loop()
-            
-            def _sync_request():
-                response = self.anthropic_client.messages.create(
+            # Check if we have a legacy anthropic client for backward compatibility
+            if hasattr(self, '_original_anthropic_client'):
+                # Use the original anthropic client interface for testing
+                response = self._original_anthropic_client.messages.create(
                     model=self.model,
                     max_tokens=self.max_tokens,
                     temperature=self.temperature,
                     messages=[{"role": "user", "content": prompt}]
                 )
-                return response.content[0].text if response.content else None
-            
-            response_text = await loop.run_in_executor(None, _sync_request)
-            return response_text
+                
+                # Extract content from mock response
+                if response.content and len(response.content) > 0:
+                    return response.content[0].text
+                return None
+            else:
+                # Use the unified AI client to make the request
+                response = await self.ai_client.generate(
+                    messages=[{"role": "user", "content": prompt}],
+                    model=self.model,
+                    max_tokens=self.max_tokens,
+                    temperature=self.temperature
+                )
+                
+                return response.content if response.content else None
             
         except Exception as e:
-            logger.error("micro_ai_request_failed", error=str(e))
+            logger.error("micro_ai_request_failed", 
+                        provider=self.ai_client.current_provider_name if self.ai_client else "unknown",
+                        error=str(e))
             return None
     
     def _parse_metadata_response(self, response: str) -> Dict[str, Any]:

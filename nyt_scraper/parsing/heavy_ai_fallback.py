@@ -10,6 +10,7 @@ import re
 from ..config import config
 from ..monitoring.structured_logger import get_logger
 from ..models import Article, ArticleStatus
+from ..ai import AIClient
 
 logger = get_logger(__name__)
 
@@ -17,8 +18,22 @@ logger = get_logger(__name__)
 class HeavyAIFallback:
     """Heavy AI fallback for comprehensive article content extraction."""
     
-    def __init__(self, anthropic_client=None):
-        self.anthropic_client = anthropic_client
+    def __init__(self, anthropic_client=None, ai_client=None):
+        # Support both new AI client and legacy anthropic client for backward compatibility
+        if ai_client:
+            self.ai_client = ai_client
+        elif anthropic_client:
+            # For backward compatibility, create a mock AI client that wraps the anthropic client
+            self.ai_client = AIClient()
+            # Mock the provider to make it appear available for testing
+            self.ai_client.current_provider = anthropic_client
+            self.ai_client.current_provider_name = "anthropic"
+            # Store the original client for backward compatibility
+            self._original_anthropic_client = anthropic_client
+        else:
+            # Create new AI client with default configuration
+            self.ai_client = AIClient()
+        
         self.enabled = config.ai_heavy_enabled
         self.model = config.ai_heavy_model
         self.max_tokens = config.ai_heavy_max_tokens
@@ -34,10 +49,22 @@ class HeavyAIFallback:
         self.min_content_length = 200
         self.min_confidence_score = 0.7
         
-        logger.info("heavy_ai_fallback_initialized",
-                   enabled=self.enabled,
-                   model=self.model,
-                   daily_limit=self.daily_limit)
+        # Log current provider info
+        provider_info = {
+            "enabled": self.enabled,
+            "model": self.model,
+            "daily_limit": self.daily_limit
+        }
+        if self.ai_client and self.ai_client.current_provider_name:
+            provider_info["provider"] = self.ai_client.current_provider_name
+        
+        logger.info("heavy_ai_fallback_initialized", **provider_info)
+    
+    @property
+    def anthropic_client(self):
+        """Backward compatibility property for tests and legacy code."""
+        # Return the original anthropic client if available, otherwise the ai_client
+        return getattr(self, '_original_anthropic_client', self.ai_client)
     
     def should_escalate(self, article: Article, parse_confidence: float, total_requests_today: int = 0) -> Tuple[bool, str]:
         """
@@ -54,8 +81,8 @@ class HeavyAIFallback:
         if not self.enabled:
             return False, "heavy_ai_disabled"
         
-        if not self.anthropic_client:
-            return False, "no_anthropic_client"
+        if not self.ai_client or not self.ai_client.current_provider:
+            return False, "no_ai_client"
         
         # Check daily budget
         today_usage = self._get_today_usage()
@@ -330,27 +357,40 @@ Return a JSON analysis:
 Focus on identifying reliable CSS selectors and structural patterns that could be used for automated extraction of similar articles from this site."""
     
     async def _make_ai_request(self, prompt: str) -> Optional[str]:
-        """Make request to Anthropic API with error handling."""
-        if not self.anthropic_client:
+        """Make request to AI provider via unified client."""
+        if not self.ai_client or not self.ai_client.current_provider:
             return None
         
         try:
-            loop = asyncio.get_event_loop()
-            
-            def _sync_request():
-                response = self.anthropic_client.messages.create(
+            # Check if we have a legacy anthropic client for backward compatibility
+            if hasattr(self, '_original_anthropic_client'):
+                # Use the original anthropic client interface for testing
+                response = self._original_anthropic_client.messages.create(
                     model=self.model,
                     max_tokens=self.max_tokens,
                     temperature=self.temperature,
                     messages=[{"role": "user", "content": prompt}]
                 )
-                return response.content[0].text if response.content else None
-            
-            response_text = await loop.run_in_executor(None, _sync_request)
-            return response_text
+                
+                # Extract content from mock response
+                if response.content and len(response.content) > 0:
+                    return response.content[0].text
+                return None
+            else:
+                # Use the unified AI client to make the request
+                response = await self.ai_client.generate(
+                    messages=[{"role": "user", "content": prompt}],
+                    model=self.model,
+                    max_tokens=self.max_tokens,
+                    temperature=self.temperature
+                )
+                
+                return response.content if response.content else None
             
         except Exception as e:
-            logger.error("heavy_ai_request_failed", error=str(e))
+            logger.error("heavy_ai_request_failed", 
+                        provider=self.ai_client.current_provider_name if self.ai_client else "unknown",
+                        error=str(e))
             return None
     
     def _parse_extraction_response(self, response: str) -> Dict[str, Any]:
