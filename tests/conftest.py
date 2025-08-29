@@ -459,3 +459,140 @@ def setup_test_logging():
     """Setup structured logging for tests."""
     logger = get_logger('test')
     yield logger
+
+
+@pytest.fixture
+def temp_directories():
+    """Create temporary directories for testing."""
+    import tempfile
+    import shutil
+    import time
+    import gc
+    from pathlib import Path
+    
+    temp_dir = Path(tempfile.mkdtemp())
+    
+    # Create required subdirectories
+    data_dir = temp_dir / "data"
+    logs_dir = temp_dir / "logs"
+    data_dir.mkdir()
+    logs_dir.mkdir()
+    
+    yield {
+        "base": temp_dir,
+        "data": data_dir,
+        "logs": logs_dir
+    }
+    
+    # Cleanup with Windows file locking retry logic
+    # Force garbage collection to release file handles
+    gc.collect()
+    time.sleep(0.2)  # Give Windows time to release locks
+    
+    # Retry cleanup up to 3 times
+    for attempt in range(3):
+        try:
+            shutil.rmtree(temp_dir)
+            break
+        except PermissionError:
+            if attempt < 2:  # Try 2 more times
+                time.sleep(0.5)
+                gc.collect()
+                continue
+            # Final attempt failed - just ignore on Windows
+            pass
+
+
+@pytest.fixture
+async def mock_scraper(temp_directories, mock_anthropic_client):
+    """Create fully mocked scraper for integration testing."""
+    from unittest.mock import patch, AsyncMock
+    from nyt_scraper.scraper import NYTScraper
+    
+    # Mock config paths
+    with patch.object(config, 'data_dir', temp_directories["data"]), \
+         patch.object(config, 'sqlite_db_path', temp_directories["data"] / "test.db"), \
+         patch.object(config, 'log_file', temp_directories["logs"] / "test.jsonl"):
+        
+        # Mock external HTTP client
+        with patch('nyt_scraper.scraper.HTTP2Client') as mock_http_class, \
+             patch('nyt_scraper.scraper.RSSFetcher') as mock_rss_class, \
+             patch('nyt_scraper.scraper.SitemapParser') as mock_sitemap_class, \
+             patch('nyt_scraper.scraper.SearchFallback') as mock_search_class:
+            
+            scraper = NYTScraper(mock_anthropic_client)
+            
+            # Setup mock return values
+            mock_http_client = mock_http_class.return_value
+            mock_http_client.fetch = AsyncMock()
+            mock_http_client.close = AsyncMock()  # Mock the close method as async
+            
+            mock_rss_class.return_value.get_latest_articles = AsyncMock(return_value=[])
+            mock_sitemap_class.return_value.get_latest_articles = AsyncMock(return_value=[])
+            mock_search_class.return_value.search_recent_articles = AsyncMock(return_value=[])
+            
+            # Initialize stats if not present
+            if not hasattr(scraper, 'stats'):
+                scraper.stats = {
+                    'total_processed': 0,
+                    'deterministic_success': 0,
+                    'ai_escalations': 0,
+                    'cache_hits': 0,
+                    'duplicates_found': 0,
+                    'challenges_detected': 0,
+                    'paywalls_detected': 0,
+                    'errors': 0
+                }
+            
+            yield scraper
+
+
+@pytest.fixture
+def temp_slo_db():
+    """Create temporary SLO database."""
+    import tempfile
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.db')
+    temp_file.close()
+    db_path = Path(temp_file.name)
+    yield db_path
+    
+    # Windows-compatible cleanup with retry logic
+    if db_path.exists():
+        import time
+        import gc
+        
+        # Force garbage collection to release file handles
+        gc.collect()
+        time.sleep(0.1)
+        
+        # Retry deletion up to 3 times
+        for attempt in range(3):
+            try:
+                db_path.unlink()
+                break
+            except PermissionError:
+                if attempt < 2:  # Try 2 more times
+                    time.sleep(0.3)
+                    gc.collect()
+                    continue
+                # Final attempt failed - ignore on Windows
+                pass
+
+
+@pytest.fixture
+def slo_tracker(temp_slo_db):
+    """Create SLO tracker with temporary database."""
+    from unittest.mock import patch
+    from nyt_scraper.monitoring.slo_tracker import SLOTracker
+    
+    with patch('nyt_scraper.monitoring.slo_tracker.config') as mock_config:
+        mock_config.data_dir = temp_slo_db.parent
+        mock_config.slo_deterministic_success_rate = 0.95
+        mock_config.slo_ai_usage_rate = 0.01
+        mock_config.slo_freshness_lag_minutes = 60
+        
+        tracker = SLOTracker()
+        tracker.slo_db_path = temp_slo_db
+        tracker._init_slo_db()
+        
+        return tracker
