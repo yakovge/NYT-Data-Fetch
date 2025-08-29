@@ -506,7 +506,7 @@ def temp_directories():
 @pytest.fixture
 async def mock_scraper(temp_directories, mock_anthropic_client):
     """Create fully mocked scraper for integration testing."""
-    from unittest.mock import patch, AsyncMock
+    from unittest.mock import patch, AsyncMock, Mock
     from nyt_scraper.scraper import NYTScraper
     
     # Mock config paths
@@ -514,11 +514,12 @@ async def mock_scraper(temp_directories, mock_anthropic_client):
          patch.object(config, 'sqlite_db_path', temp_directories["data"] / "test.db"), \
          patch.object(config, 'log_file', temp_directories["logs"] / "test.jsonl"):
         
-        # Mock external HTTP client
+        # Mock external HTTP client and SLO tracker
         with patch('nyt_scraper.scraper.HTTP2Client') as mock_http_class, \
              patch('nyt_scraper.scraper.RSSFetcher') as mock_rss_class, \
              patch('nyt_scraper.scraper.SitemapParser') as mock_sitemap_class, \
-             patch('nyt_scraper.scraper.SearchFallback') as mock_search_class:
+             patch('nyt_scraper.scraper.SearchFallback') as mock_search_class, \
+             patch('nyt_scraper.scraper.SLOTracker') as mock_slo_class:
             
             scraper = NYTScraper(mock_anthropic_client)
             
@@ -530,6 +531,14 @@ async def mock_scraper(temp_directories, mock_anthropic_client):
             mock_rss_class.return_value.get_latest_articles = AsyncMock(return_value=[])
             mock_sitemap_class.return_value.get_latest_articles = AsyncMock(return_value=[])
             mock_search_class.return_value.search_recent_articles = AsyncMock(return_value=[])
+            
+            # Setup mock SLO tracker to prevent database locking
+            mock_slo_tracker = mock_slo_class.return_value
+            mock_slo_tracker.record_response_time = Mock()
+            mock_slo_tracker.record_measurement = Mock()
+            mock_slo_tracker.update_error_budget = Mock()
+            mock_slo_tracker.get_slo_status = Mock(return_value={'status': 'GREEN'})
+            mock_slo_tracker.close = Mock()
             
             # Initialize stats if not present
             if not hasattr(scraper, 'stats'):
@@ -594,5 +603,8 @@ def slo_tracker(temp_slo_db):
         tracker = SLOTracker()
         tracker.slo_db_path = temp_slo_db
         tracker._init_slo_db()
+        
+        # Use batch size 1 for tests to ensure immediate writes
+        tracker._batch_size = 1
         
         return tracker

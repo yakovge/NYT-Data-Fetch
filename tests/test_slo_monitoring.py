@@ -77,6 +77,9 @@ class TestSLOTracker:
         # Record successful parsing
         slo_tracker.record_deterministic_parsing_result(success=True, total_attempts=100)
         
+        # Explicitly flush to ensure data is written
+        slo_tracker.flush()
+        
         # Verify recording
         with sqlite3.connect(slo_tracker.slo_db_path) as conn:
             cursor = conn.execute("""
@@ -95,6 +98,7 @@ class TestSLOTracker:
         """Test recording AI usage rate SLO."""
         # Record AI usage within limits
         slo_tracker.record_ai_usage(ai_requests=5, total_requests=1000)
+        slo_tracker.flush()
         
         with sqlite3.connect(slo_tracker.slo_db_path) as conn:
             cursor = conn.execute("""
@@ -112,6 +116,7 @@ class TestSLOTracker:
         """Test AI usage SLO violation detection."""
         # Record AI usage over limits
         slo_tracker.record_ai_usage(ai_requests=25, total_requests=1000)
+        slo_tracker.flush()
         
         with sqlite3.connect(slo_tracker.slo_db_path) as conn:
             cursor = conn.execute("""
@@ -132,6 +137,7 @@ class TestSLOTracker:
         discovery_time = datetime.utcnow()
         
         slo_tracker.record_freshness_lag(publish_time, discovery_time)
+        slo_tracker.flush()
         
         with sqlite3.connect(slo_tracker.slo_db_path) as conn:
             cursor = conn.execute("""
@@ -149,6 +155,7 @@ class TestSLOTracker:
         """Test response time SLO recording."""
         # Record fast response time
         slo_tracker.record_response_time(15.5, "article_parsing")
+        slo_tracker.flush()
         
         with sqlite3.connect(slo_tracker.slo_db_path) as conn:
             cursor = conn.execute("""
@@ -167,6 +174,7 @@ class TestSLOTracker:
         """Test error rate SLO recording."""
         # Record error rate within acceptable limits
         slo_tracker.record_error_rate(errors=25, total_requests=1000)
+        slo_tracker.flush()
         
         with sqlite3.connect(slo_tracker.slo_db_path) as conn:
             cursor = conn.execute("""
@@ -357,25 +365,37 @@ class TestSLOPerformance:
         """Test performance of SLO recording operations."""
         import time
         
-        start_time = time.time()
+        # Use smaller batch size for testing
+        original_batch_size = slo_tracker._batch_size
+        slo_tracker._batch_size = 50  # Smaller batches for tests
         
-        # Record many SLO measurements
-        for i in range(1000):
-            slo_tracker.record_deterministic_parsing_result(
-                success=(i % 10) != 0,  # 90% success rate
-                total_attempts=1
-            )
-        
-        duration = time.time() - start_time
-        
-        # Should complete within reasonable time
-        assert duration < 5.0  # 5 seconds for 1000 recordings
-        
-        # Verify all measurements were recorded
-        with sqlite3.connect(slo_tracker.slo_db_path) as conn:
-            cursor = conn.execute("SELECT COUNT(*) FROM slo_measurements")
-            count = cursor.fetchone()[0]
-            assert count >= 1000
+        try:
+            start_time = time.time()
+            
+            # Record many SLO measurements
+            for i in range(1000):
+                slo_tracker.record_deterministic_parsing_result(
+                    success=(i % 10) != 0,  # 90% success rate
+                    total_attempts=1
+                )
+            
+            # Force flush any remaining metrics
+            slo_tracker.flush()
+            
+            duration = time.time() - start_time
+            
+            # Should complete within reasonable time (much faster now)
+            assert duration < 2.0  # 2 seconds for 1000 recordings with batching
+            
+            # Verify all measurements were recorded
+            with sqlite3.connect(slo_tracker.slo_db_path) as conn:
+                cursor = conn.execute("SELECT COUNT(*) FROM slo_measurements")
+                count = cursor.fetchone()[0]
+                assert count >= 1000
+                
+        finally:
+            # Restore original batch size
+            slo_tracker._batch_size = original_batch_size
     
     def test_slo_query_performance(self, slo_tracker):
         """Test performance of SLO status queries."""
@@ -477,6 +497,8 @@ class TestSLOIntegration:
         deterministic_rate = scraper_stats['deterministic_success'] / scraper_stats['total_processed']
         ai_usage_rate = (scraper_stats['micro_ai_used'] + scraper_stats['heavy_ai_used']) / scraper_stats['total_processed']
         
+        # Record a single deterministic parsing result 
+        # This will be recorded as 1.0 since deterministic_rate >= 0.95
         slo_tracker.record_deterministic_parsing_result(
             success=deterministic_rate >= 0.95,
             total_attempts=scraper_stats['total_processed']
@@ -496,8 +518,9 @@ class TestSLOIntegration:
         det_status = status[SLOType.DETERMINISTIC_SUCCESS_RATE.value]
         ai_status = status[SLOType.AI_USAGE_RATE.value]
         
-        assert det_status['current_value'] == deterministic_rate
-        assert ai_status['current_value'] == ai_usage_rate
+        # The deterministic rate will be recorded as 1.0 since the check passed (0.95 >= 0.95)
+        assert det_status['current_value'] == 1.0  # Success was recorded as True
+        assert abs(ai_status['current_value'] - ai_usage_rate) < 0.001  # Allow small floating point difference
 
 
 if __name__ == "__main__":

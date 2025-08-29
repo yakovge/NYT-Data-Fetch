@@ -40,13 +40,14 @@ class FTS5Indexer:
         with self._lock:
             try:
                 with sqlite3.connect(self.db_path) as conn:
-                    # Check if FTS5 is available
+                    # Check if FTS5 is available by trying to create a test table
                     try:
-                        conn.execute("SELECT fts5_version()")
+                        conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS fts5_test USING fts5(test)")
+                        conn.execute("DROP TABLE IF EXISTS fts5_test")
                         logger.info("fts5_available")
-                    except sqlite3.OperationalError:
+                    except sqlite3.OperationalError as e:
                         logger.error("fts5_not_available", 
-                                   message="SQLite was compiled without FTS5 support")
+                                   message=f"SQLite FTS5 support issue: {e}")
                         raise RuntimeError("FTS5 not available in this SQLite build")
                     
                     # Create FTS5 virtual table

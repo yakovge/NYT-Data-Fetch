@@ -58,6 +58,15 @@ class SLOTracker:
         self.error_budget_window_days = 30
         self.error_budget_alert_threshold = 0.8  # Alert when 80% of error budget consumed
         
+        # Performance optimizations
+        self._conn = None  # Persistent connection
+        self._batch_size = 100  # Batch inserts
+        self._pending_metrics = []  # Buffer for batching
+        self._last_budget_update = {}  # Cache last budget update time per SLO type
+        self._budget_update_interval = 60  # Update error budget every 60 seconds max
+        self._last_alert_time = {}  # Cache last alert time per SLO type to avoid spam
+        self._alert_cooldown = 60  # Minimum seconds between same alerts
+        
         self._init_slo_db()
         logger.info("slo_tracker_initialized", target_count=len(self.slo_targets))
     
@@ -118,11 +127,57 @@ class SLOTracker:
                 # Indexes for performance
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_slo_measurements_timestamp ON slo_measurements(timestamp)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_slo_measurements_type ON slo_measurements(slo_type)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_slo_measurements_composite ON slo_measurements(slo_type, timestamp)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_error_budget_timestamp ON error_budget_status(timestamp)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_slo_alerts_timestamp ON slo_alerts(timestamp)")
                 
+                # Enable WAL mode for better concurrent access
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA synchronous=NORMAL")
+                
         except Exception as e:
             logger.error("slo_db_init_failed", error=str(e))
+    
+    def _get_connection(self):
+        """Get or create persistent database connection."""
+        if self._conn is None:
+            self._conn = sqlite3.connect(self.slo_db_path, check_same_thread=False)
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA synchronous=NORMAL")
+        return self._conn
+    
+    def _flush_pending_metrics(self):
+        """Flush any pending metrics to database."""
+        if not self._pending_metrics:
+            return
+            
+        try:
+            conn = self._get_connection()
+            import json
+            
+            # Batch insert all pending metrics
+            conn.executemany("""
+                INSERT INTO slo_measurements
+                (timestamp, slo_type, measured_value, target_value, is_met, error_budget_consumed,
+                 window_start, window_end, additional_data)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, [(
+                m.timestamp.isoformat(),
+                m.slo_type.value,
+                m.value,
+                m.target,
+                m.is_met,
+                m.error_budget_consumed,
+                m.additional_data.get('window_start') if m.additional_data else None,
+                m.additional_data.get('window_end') if m.additional_data else None,
+                json.dumps(m.additional_data) if m.additional_data else None
+            ) for m in self._pending_metrics])
+            
+            conn.commit()
+            self._pending_metrics.clear()
+            
+        except Exception as e:
+            logger.error("batch_insert_failed", error=str(e), metrics_count=len(self._pending_metrics))
     
     def record_deterministic_parsing_result(self, success: bool, total_attempts: int = None, window_hours: int = 1):
         """Record deterministic parsing success rate measurement."""
@@ -274,108 +329,147 @@ class SLOTracker:
             logger.error("error_rate_slo_record_failed", error=str(e))
     
     def _record_slo_metric(self, metric: SLOMetric, window_start: datetime, window_end: datetime):
-        """Record SLO metric to database."""
+        """Record SLO metric to database using batching for performance."""
         try:
-            import json
+            # Add window times to metric data
+            if metric.additional_data is None:
+                metric.additional_data = {}
+            metric.additional_data['window_start'] = window_start.isoformat()
+            metric.additional_data['window_end'] = window_end.isoformat()
             
-            with sqlite3.connect(self.slo_db_path) as conn:
-                conn.execute("""
-                    INSERT INTO slo_measurements
-                    (timestamp, slo_type, measured_value, target_value, is_met, error_budget_consumed,
-                     window_start, window_end, additional_data)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    metric.timestamp.isoformat(),
-                    metric.slo_type.value,
-                    metric.value,
-                    metric.target,
-                    metric.is_met,
-                    metric.error_budget_consumed,
-                    window_start.isoformat(),
-                    window_end.isoformat(),
-                    json.dumps(metric.additional_data) if metric.additional_data else None
-                ))
-                
-                # Update error budget status
-                self._update_error_budget_status(metric.slo_type, window_end)
+            # Add to pending batch
+            self._pending_metrics.append(metric)
+            
+            # Flush when batch is full, or immediately if batch size is 1 (for tests)
+            if len(self._pending_metrics) >= self._batch_size or self._batch_size == 1:
+                self._flush_pending_metrics()
+            
+            # Only update error budget periodically to avoid performance hit
+            self._maybe_update_error_budget(metric.slo_type, window_end)
                 
         except Exception as e:
             logger.error("slo_metric_record_failed", slo_type=metric.slo_type.value, error=str(e))
+    
+    def _maybe_update_error_budget(self, slo_type: SLOType, timestamp: datetime):
+        """Update error budget only if enough time has passed since last update."""
+        last_update = self._last_budget_update.get(slo_type.value, datetime.min)
+        time_since_update = (timestamp - last_update).total_seconds()
+        
+        if time_since_update >= self._budget_update_interval:
+            self._update_error_budget_status(slo_type, timestamp)
+            self._last_budget_update[slo_type.value] = timestamp
+    
+    def flush(self):
+        """Force flush any pending metrics immediately (useful for tests)."""
+        with self._lock:
+            self._flush_pending_metrics()
+    
+    def close(self):
+        """Close persistent connection and flush any pending metrics."""
+        try:
+            with self._lock:
+                # Flush any remaining metrics
+                self._flush_pending_metrics()
+                
+                # Close persistent connection
+                if self._conn:
+                    self._conn.close()
+                    self._conn = None
+                    
+        except Exception as e:
+            logger.error("slo_tracker_close_failed", error=str(e))
     
     def _update_error_budget_status(self, slo_type: SLOType, timestamp: datetime):
         """Update error budget status for given SLO type."""
         try:
             window_start = timestamp - timedelta(days=self.error_budget_window_days)
             
-            with sqlite3.connect(self.slo_db_path) as conn:
-                # Calculate error budget consumption over window
-                cursor = conn.execute("""
-                    SELECT 
-                        COUNT(*) as total_measurements,
-                        COUNT(CASE WHEN is_met = 0 THEN 1 END) as failed_measurements,
-                        AVG(error_budget_consumed) as avg_budget_consumed
-                    FROM slo_measurements
-                    WHERE slo_type = ? AND timestamp >= ?
-                """, (slo_type.value, window_start.isoformat()))
+            conn = self._get_connection()
+            
+            # Calculate error budget consumption over window
+            cursor = conn.execute("""
+                SELECT 
+                    COUNT(*) as total_measurements,
+                    COUNT(CASE WHEN is_met = 0 THEN 1 END) as failed_measurements,
+                    AVG(error_budget_consumed) as avg_budget_consumed
+                FROM slo_measurements
+                WHERE slo_type = ? AND timestamp >= ?
+            """, (slo_type.value, window_start.isoformat()))
+            
+            result = cursor.fetchone()
+            if result and result[0] > 0:
+                total_measurements = result[0]
+                failed_measurements = result[1] or 0
                 
-                result = cursor.fetchone()
-                if result and result[0] > 0:
-                    total_measurements = result[0]
-                    failed_measurements = result[1] or 0
-                    
-                    # Calculate budget consumed as percentage
-                    budget_consumed_percent = (failed_measurements / total_measurements) * 100
-                    budget_remaining_percent = max(0, 100 - budget_consumed_percent)
-                    
-                    # Insert budget status
-                    conn.execute("""
-                        INSERT INTO error_budget_status
-                        (timestamp, slo_type, budget_consumed_percent, budget_remaining_percent,
-                         window_start, window_end, total_measurements, failed_measurements)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (
-                        timestamp.isoformat(),
-                        slo_type.value,
-                        budget_consumed_percent,
-                        budget_remaining_percent,
-                        window_start.isoformat(),
-                        timestamp.isoformat(),
-                        total_measurements,
-                        failed_measurements
-                    ))
+                # Calculate budget consumed as percentage
+                budget_consumed_percent = (failed_measurements / total_measurements) * 100
+                budget_remaining_percent = max(0, 100 - budget_consumed_percent)
+                
+                # Insert budget status
+                conn.execute("""
+                    INSERT INTO error_budget_status
+                    (timestamp, slo_type, budget_consumed_percent, budget_remaining_percent,
+                     window_start, window_end, total_measurements, failed_measurements)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    timestamp.isoformat(),
+                    slo_type.value,
+                    budget_consumed_percent,
+                    budget_remaining_percent,
+                    window_start.isoformat(),
+                    timestamp.isoformat(),
+                    total_measurements,
+                    failed_measurements
+                ))
+                
+                conn.commit()
                     
         except Exception as e:
             logger.error("error_budget_update_failed", slo_type=slo_type.value, error=str(e))
     
     def _check_slo_alerts(self, metric: SLOMetric):
-        """Check if SLO alerts should be triggered."""
+        """Check if SLO alerts should be triggered (with cooldown to prevent spam)."""
         try:
+            current_time = datetime.utcnow()
+            
             # Check immediate SLO violation
             if not metric.is_met:
-                self._trigger_alert(
-                    slo_type=metric.slo_type,
-                    alert_type="slo_violation",
-                    severity="warning",
-                    message=f"SLO violation: {metric.slo_type.value} = {metric.value:.4f}, target = {metric.target:.4f}",
-                    measured_value=metric.value,
-                    target_value=metric.target,
-                    error_budget_consumed=metric.error_budget_consumed
-                )
+                alert_key = f"{metric.slo_type.value}_slo_violation"
+                if self._should_trigger_alert(alert_key, current_time):
+                    self._trigger_alert(
+                        slo_type=metric.slo_type,
+                        alert_type="slo_violation",
+                        severity="warning",
+                        message=f"SLO violation: {metric.slo_type.value} = {metric.value:.4f}, target = {metric.target:.4f}",
+                        measured_value=metric.value,
+                        target_value=metric.target,
+                        error_budget_consumed=metric.error_budget_consumed
+                    )
+                    self._last_alert_time[alert_key] = current_time
             
             # Check error budget exhaustion
             if metric.error_budget_consumed >= self.error_budget_alert_threshold:
-                self._trigger_alert(
-                    slo_type=metric.slo_type,
-                    alert_type="error_budget_exhaustion",
-                    severity="critical",
-                    message=f"Error budget {metric.error_budget_consumed*100:.1f}% consumed for {metric.slo_type.value}",
-                    measured_value=metric.value,
-                    target_value=metric.target,
-                    error_budget_consumed=metric.error_budget_consumed
-                )
+                alert_key = f"{metric.slo_type.value}_budget_exhaustion"
+                if self._should_trigger_alert(alert_key, current_time):
+                    self._trigger_alert(
+                        slo_type=metric.slo_type,
+                        alert_type="error_budget_exhaustion",
+                        severity="critical",
+                        message=f"Error budget {metric.error_budget_consumed*100:.1f}% consumed for {metric.slo_type.value}",
+                        measured_value=metric.value,
+                        target_value=metric.target,
+                        error_budget_consumed=metric.error_budget_consumed
+                    )
+                    self._last_alert_time[alert_key] = current_time
             
         except Exception as e:
             logger.error("slo_alert_check_failed", error=str(e))
+    
+    def _should_trigger_alert(self, alert_key: str, current_time: datetime) -> bool:
+        """Check if enough time has passed since last alert to avoid spam."""
+        last_alert = self._last_alert_time.get(alert_key, datetime.min)
+        time_since_last = (current_time - last_alert).total_seconds()
+        return time_since_last >= self._alert_cooldown
     
     def _trigger_alert(self, slo_type: SLOType, alert_type: str, severity: str, message: str, 
                       measured_value: float = None, target_value: float = None, error_budget_consumed: float = None):
@@ -614,8 +708,19 @@ class SLOTracker:
                 """, (alert_cutoff.isoformat(),))
                 cleanup_results["alerts_deleted"] = cursor.rowcount
                 
-                # Vacuum database
-                conn.execute("VACUUM")
+                # Commit the transaction before vacuum
+                conn.commit()
+            
+            # Vacuum database (must be done outside transaction in autocommit mode)
+            try:
+                vacuum_conn = sqlite3.connect(self.slo_db_path)
+                vacuum_conn.isolation_level = None  # Enable autocommit mode
+                vacuum_conn.execute("VACUUM")
+                vacuum_conn.close()
+                cleanup_results["vacuum_completed"] = True
+            except Exception as e:
+                logger.warning("vacuum_failed", error=str(e))
+                cleanup_results["vacuum_completed"] = False
             
             logger.info("slo_data_cleanup_completed", **cleanup_results)
             return cleanup_results

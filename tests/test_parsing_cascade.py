@@ -302,7 +302,6 @@ class TestThreeTierIntegration:
         assert article.parser_path == "json_ld"
         assert article.did_use_micro_ai is False
         assert article.did_escalate_heavy is False
-        mock_scraper.stats['deterministic_success'] += 1
         
         assert mock_scraper.stats['deterministic_success'] == 1
     

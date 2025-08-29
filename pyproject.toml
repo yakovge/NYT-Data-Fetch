@@ -22,6 +22,8 @@ testpaths = ["tests"]
 python_files = "test_*.py"
 python_functions = "test_*"
 asyncio_mode = "auto"
+timeout = 300
+timeout_method = "thread"
 
 [tool.coverage.run]
 source = ["nyt_scraper"]

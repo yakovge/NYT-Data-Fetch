@@ -374,10 +374,6 @@ class TestStorageEviction:
         # The specific operations depend on data conditions, so just verify it completes without error
 
 
-@pytest.mark.skipif(
-    not hasattr(sqlite3, 'enable_load_extension') or sys.platform == 'win32',
-    reason="FTS5 may not be available on this platform"
-)
 class TestSearchIndexing:
     """Test FTS5 and Whoosh indexing."""
     
@@ -387,9 +383,10 @@ class TestSearchIndexing:
         
         # Create test article
         article = Article(
+            source_url="https://example.com/fts5-test",
             canonical_url="https://example.com/fts5-test",
             title="FTS5 Search Test Article",
-            content="This article contains searchable content about technology and innovation.",
+            body="This article contains searchable content about technology and innovation.",
             author="Test Author",
             section="Technology",
             status=ArticleStatus.STORED
